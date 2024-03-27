@@ -1,0 +1,165 @@
+org: dinhhungdev
+app: aws-sls-api
+service: aws-sls-api
+frameworkVersion: '3'
+configValidationMode: error
+
+custom:
+  dynamo:
+    CustomerTable: ${self:service}-customers-${sls:stage}
+    MessageTable: ${self:service}-queue-message-${sls:stage}
+  sqs:
+    base:
+      name: ${self:service}
+      arn: arn:aws:sqs:${self:provider.region}:${aws:accountId}
+    MyQueue:
+      name: ${self:custom.sqs.base.name}-my-queue-${self:provider.stage}
+      arn: ${self:custom.sqs.base.arn}:${self:custom.sqs.MyQueue.name}
+  s3:
+    BucketName: ${self:service}-bucket-${sls:stage}
+
+provider:
+  name: aws
+  region: ap-southeast-1
+  runtime: nodejs18.x
+  stage: dev
+  iam:
+    role:
+      statements:
+        - Effect: 'Allow'
+          Action:
+            - 'dynamodb:PutItem'
+            - 'dynamodb:Get*'
+            - 'dynamodb:Scan*'   
+            - 'dynamodb:UpdateItem'
+            - 'dynamodb:DeleteItem'
+            - 'dynamodb:BatchWriteItem'
+            - 'dynamodb:BatchGetItem'
+          Resource: 
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:service}-customers-${sls:stage}
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:service}-queue-message-${sls:stage}
+        - Effect: Allow
+          Action:
+            - sqs:ReceiveMessage
+          Resource: 
+            - ${self:custom.sqs.MyQueue.arn}
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+          Resource: 
+            - arn:aws:s3:::${self:custom.s3.BucketName}/RemoveFlightNumber/*
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+          Resource: 
+            - arn:aws:s3:::${self:custom.s3.BucketName}/Processed/*
+            - arn:aws:s3:::${self:custom.s3.BucketName}/UnProcessed/*
+            - arn:aws:s3:::${self:custom.s3.BucketName}/Archived/*
+            - arn:aws:s3:::${self:custom.s3.BucketName}/Error/*
+
+  environment:
+    DYNAMODB_CUSTOMER_TABLE: ${self:custom.dynamo.CustomerTable}
+    DYNAMODB_MESAGE_TABLE: ${self:custom.dynamo.MessageTable}
+
+functions:
+  api:
+    handler: index.handler
+    events:
+      - httpApi:
+          path: /
+          method: get
+  createCustomer:
+    handler: createCustomers.createCustomer
+    events:
+      - httpApi:
+          path: /customers
+          method: post
+  getCustomer:
+    handler: getCustomers.getCustomers
+    events:
+      - httpApi:
+          path: /customers
+          method: get
+  saveQueueMessage:
+    handler: createMessage.createMessage
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - MyQueue
+              - Arn
+          batchSize: 1
+ 
+  processS3:
+    handler: processS3Created.processS3
+    events:
+      - s3:
+          bucket: ${self:custom.s3.BucketName}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: RemoveFlightNumber/
+            - suffix: .json
+
+
+resources:
+  Resources:
+    CustomerTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: primary_key
+            AttributeType: S
+        BillingMode: PAY_PER_REQUEST
+        KeySchema:
+          - AttributeName: primary_key
+            KeyType: HASH
+        TableName: ${self:custom.dynamo.CustomerTable}
+    QueueMessageTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: primary_key
+            AttributeType: S
+        BillingMode: PAY_PER_REQUEST
+        KeySchema:
+          - AttributeName: primary_key
+            KeyType: HASH
+        TableName: ${self:custom.dynamo.MessageTable}
+    MyQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:custom.sqs.MyQueue.name}
+    # MyBucket:
+    #   Type: AWS::S3::Bucket
+    #   Properties:
+    #     BucketName: ${self:custom.s3.BucketName}
+    # RemoveFlightNumber:
+    #   Type: AWS::S3::BucketObject
+    #   Properties:
+    #     Bucket: 
+    #       Ref: MyBucket
+    #     Key: RemoveFlightNumber/
+    # Processed:
+    #   Type: AWS::S3::BucketObject
+    #   Properties:
+    #     Bucket: 
+    #       Ref: MyBucket
+    #     Key: Processed/
+    # UnProcessed:
+    #   Type: AWS::S3::BucketObject
+    #   Properties:
+    #     Bucket: 
+    #       Ref: MyBucket
+    #     Key: UnProcessed/
+    # Archived:
+    #   Type: AWS::S3::BucketObject
+    #   Properties:
+    #     Bucket: 
+    #       Ref: MyBucket
+    #     Key: Archived/
+    # Error:
+    #   Type: AWS::S3::BucketObject
+    #   Properties:
+    #     Bucket: 
+    #       Ref: MyBucket
+    #     Key: Error/
